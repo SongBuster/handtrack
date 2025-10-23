@@ -46,7 +46,7 @@ export default function LoginPage() {
   }, [navigate]);
 
   return (
-    <div className="misn-h-screen flex items-center justify-center bg-gray-100">
+    <div className="min-h-screen flex items-center justify-center bg-gray-100">
       <form
         onSubmit={handleSubmit}
         className="bg-white p-6 rounded-lg shadow-md w-80"

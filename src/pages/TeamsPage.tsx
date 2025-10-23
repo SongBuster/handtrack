@@ -9,8 +9,50 @@ export default function TeamsPage() {
   const [name, setName] = useState("");
   const [shortName, setShortName] = useState("");
 
+  async function refreshTeamsForUser(userId: string | null | undefined) {
+    if (!userId) {
+      setTeams([]);
+      return;
+    }
+
+    const teamsFromDb = await db.teams
+      .where("user_id")
+      .equals(userId)
+      .toArray();
+    setTeams(teamsFromDb);
+  }
+
   useEffect(() => {
-    db.teams.toArray().then(setTeams);
+    let canceled = false;
+
+    const initializeTeams = async () => {
+      try {
+        const { data } = await supabase.auth.getUser();
+        const userId = data.user?.id ?? null;
+
+        if (!canceled) {
+          await refreshTeamsForUser(userId);
+        }
+
+        try {
+          await syncTeams();
+        } catch (error) {
+          console.warn("Sincronización fallida (offline?):", error);
+        }
+
+        if (!canceled) {
+          await refreshTeamsForUser(userId);
+        }
+      } catch (error) {
+        console.error("Error al inicializar equipos:", error);
+      }
+    };
+
+    void initializeTeams();
+
+    return () => {
+      canceled = true;
+    };
   }, []);
 
   async function addTeam() {
@@ -34,8 +76,8 @@ export default function TeamsPage() {
     } catch (error) {
       console.warn("Sincronización fallida (offline?):", error);
     }
-    
-    setTeams(await db.teams.toArray());
+
+    await refreshTeamsForUser(user_id ?? null);
     setName("");
     setShortName("");
   }
@@ -71,7 +113,9 @@ export default function TeamsPage() {
           {teams.map((t) => (
             <li key={t.id} className="py-2">
               <span className="font-semibold">{t.name}</span>
-              {t.short_name && <span className="text-gray-500 ml-2">({t.short_name})</span>}
+              {t.short_name && (
+                <span className="text-gray-500 ml-2">({t.short_name})</span>
+              )}
             </li>
           ))}
         </ul>
