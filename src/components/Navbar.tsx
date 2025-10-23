@@ -1,0 +1,83 @@
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { supabase } from "../services/dbCloud";
+import { db } from "../services/dbLocal";
+
+export default function Navbar() {
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+
+  const linkClass = (path: string) =>
+    `px-4 py-2 rounded-md ${
+      pathname === path
+        ? "bg-blue-500 text-white"
+        : "text-blue-500 hover:bg-blue-100"
+    }`;
+
+  // 🔍 Recuperar usuario actual
+  useEffect(() => {
+    const fetchUser = async () => {
+      const { data } = await supabase.auth.getUser();
+      setUserEmail(data.user?.email ?? null);
+    };
+
+    fetchUser();
+
+    // Escuchar cambios de sesión (por si cambia de usuario)
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setUserEmail(session?.user?.email ?? null);
+      }
+    );
+
+    return () => {
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
+  async function handleLogout() {
+    try {
+      // 🧹 Limpieza selectiva de datos (sin cerrar la base)
+      await Promise.all([
+        db.teams.clear(),
+        db.players.clear(),
+        db.matches.clear(),
+        // si más adelante añadimos plays u otras tablas, también aquí
+      ]);
+      console.log("🧹 Datos locales limpiados");
+    } catch (err) {
+      console.error("Error al limpiar base local:", err);
+    }
+
+    await supabase.auth.signOut();
+    navigate("/login", { replace: true });
+  }
+
+  return (
+    <nav className="flex flex-col sm:flex-row sm:justify-between sm:items-center p-3 bg-white shadow">
+      <div className="flex gap-2 mb-2 sm:mb-0">
+        <Link to="/" className={linkClass("/")}>
+          Equipos
+        </Link>
+        <Link to="/players" className={linkClass("/players")}>
+          Jugadores
+        </Link>
+        <Link to="/matches" className={linkClass("/matches")}>
+          Partidos
+        </Link>
+      </div>
+
+      <div className="flex flex-col items-end">
+        <button
+          onClick={handleLogout}
+          className="text-red-600 hover:text-red-800 text-sm font-semibold"
+        >
+          Cerrar sesión
+        </button>
+
+        {userEmail && <p className="text-xs text-gray-500 mt-1">{userEmail}</p>}
+      </div>
+    </nav>
+  );
+}
