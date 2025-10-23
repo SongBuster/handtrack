@@ -1,10 +1,13 @@
 import { RouterProvider } from "react-router-dom";
 import { router } from "./router";
+import { SelectedTeamProvider } from "./context/SelectedTeamContext";
 
 export default function App() {
   return (
     <div className="min-h-screen bg-gray-50">
-      <RouterProvider router={router} />
+      <SelectedTeamProvider>
+        <RouterProvider router={router} />
+      </SelectedTeamProvider>      
     </div>
   );
 }

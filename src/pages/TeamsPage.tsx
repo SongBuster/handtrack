@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { db, type Team } from "../services/dbLocal";
 import Navbar from "../components/Navbar";
+import LoadingIndicator from "../components/LoadingIndicator";
 import { supabase } from "../services/dbCloud";
 import { syncTeams } from "../services/syncQueue";
+import { useSelectedTeam } from "../context/SelectedTeamContext";
 
 export default function TeamsPage() {
   const [teams, setTeams] = useState<Team[]>([]);
@@ -11,6 +13,9 @@ export default function TeamsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
   const [editingShortName, setEditingShortName] = useState("");
+  const { selectedTeam, selectTeam, clearTeam } = useSelectedTeam();
+  const [isLoading, setIsLoading] = useState(true);
+
 
   async function refreshTeamsForUser(userId: string | null | undefined) {
     if (!userId) {
@@ -35,6 +40,7 @@ export default function TeamsPage() {
     let canceled = false;
 
     const initializeTeams = async () => {
+      setIsLoading(true);
       try {
         const { data } = await supabase.auth.getUser();
         const userId = data.user?.id ?? null;
@@ -54,6 +60,10 @@ export default function TeamsPage() {
         }
       } catch (error) {
         console.error("Error al inicializar equipos:", error);
+      } finally {
+        if (!canceled) {
+          setIsLoading(false);
+        }
       }
     };
 
@@ -63,6 +73,12 @@ export default function TeamsPage() {
       canceled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (selectedTeam && !teams.some((team) => team.id === selectedTeam.id)) {
+      clearTeam();
+    }
+  }, [teams, selectedTeam, clearTeam]);
 
   async function addTeam() {
     if (!name.trim()) return;
@@ -133,6 +149,10 @@ export default function TeamsPage() {
       cancelEditing();
     }
 
+    if (selectedTeam?.id === team.id) {
+      clearTeam();
+    }    
+
     if (!team.synced) {
       await db.teams.delete(team.id);
     } else {
@@ -146,6 +166,15 @@ export default function TeamsPage() {
     }
 
     await refreshCurrentUserTeams();
+  }
+
+  if (isLoading) {
+    return (
+      <>
+        <Navbar />
+        <LoadingIndicator className="min-h-[50vh]" message="Cargando equipos..." />
+      </>
+    );
   }
 
   return (
@@ -177,7 +206,19 @@ export default function TeamsPage() {
 
         <ul className="divide-y">
           {teams.map((t) => (
-                        <li key={t.id} className="py-2 flex items-center gap-2">
+            <li
+              key={t.id}
+              className={`py-2 px-2 flex items-center gap-2 rounded cursor-pointer transition ${
+                selectedTeam?.id === t.id
+                  ? "bg-blue-50 border border-blue-200"
+                  : "hover:bg-gray-50"
+              }`}
+              onClick={() => {
+                if (editingId !== t.id) {
+                  selectTeam(t);
+                }
+              }}
+            >
               {editingId === t.id ? (
                 <>
                   <input
@@ -192,13 +233,19 @@ export default function TeamsPage() {
                   />
                   <button
                     className="bg-green-500 text-white px-3 py-1 rounded"
-                    onClick={() => void saveEditing(t.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void saveEditing(t.id);
+                    }}
                   >
                     Guardar
                   </button>
                   <button
                     className="border px-3 py-1 rounded"
-                    onClick={cancelEditing}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      cancelEditing();
+                    }}
                   >
                     Cancelar
                   </button>
@@ -213,13 +260,19 @@ export default function TeamsPage() {
                   </div>
                   <button
                     className="text-blue-600 px-2 py-1"
-                    onClick={() => startEditing(t)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startEditing(t);
+                    }}
                   >
                     Editar
                   </button>
                   <button
                     className="text-red-600 px-2 py-1"
-                    onClick={() => void deleteTeam(t)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void deleteTeam(t);
+                    }}
                   >
                     Eliminar
                   </button>
