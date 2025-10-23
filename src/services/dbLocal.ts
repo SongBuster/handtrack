@@ -6,6 +6,7 @@ export interface Team {
   short_name?: string;
   synced?: boolean; // campo auxiliar opcional para sincronización
   user_id?: string; // para identificar al usuario propietario
+  pending_delete?: boolean; // marca para borrado pendiente
 }
 
 export interface Player {
@@ -58,6 +59,26 @@ export class HandtrackDB extends Dexie {
           .modify((team: Team) => {
             if (typeof team.synced === "undefined") {
               team.synced = false;
+            }
+          });
+      });
+
+    this.version(3)
+      .stores({
+        teams: "id, user_id, name",
+        players: "id, team_id, number, name, active",
+        matches: "id, my_team_id, rival_name, is_home, active, date",
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table("teams")
+          .toCollection()
+          .modify((team: Team) => {
+            if (typeof team.synced === "undefined") {
+              team.synced = false;
+            }
+            if (typeof team.pending_delete === "undefined") {
+              team.pending_delete = false;
             }
           });
       });
