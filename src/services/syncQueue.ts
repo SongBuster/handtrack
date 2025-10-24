@@ -1,4 +1,11 @@
-import { db , type Player, type Match} from "./dbLocal";
+import {
+  db,
+  type Player,
+  type Match,
+  type Situation,
+  type Section,
+  type Tag,
+} from "./dbLocal";
 import { supabase } from "./dbCloud";
 
 export async function syncTeams() {
@@ -90,6 +97,289 @@ export async function syncTeams() {
       await db.teams.put({ ...team, synced: true, pending_delete: false });
     }
     console.log("⬇️ Equipos descargados desde Supabase");
+  }
+}
+
+export async function syncSituations() {
+  const { data: userData } = await supabase.auth.getUser();
+  const user_id = userData?.user?.id;
+  if (!user_id) return;
+
+  const pendingDeletion = await db.situations
+    .where("user_id")
+    .equals(user_id)
+    .filter((situation) => Boolean(situation.pending_delete))
+    .toArray();
+
+  if (pendingDeletion.length > 0) {
+    const idsToDelete = pendingDeletion
+      .map((situation) => situation.id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+
+    if (idsToDelete.length > 0) {
+      const { error } = await supabase
+        .from("situations")
+        .delete()
+        .in("id", idsToDelete)
+        .eq("user_id", user_id);
+
+      if (!error) {
+        await db.situations.bulkDelete(idsToDelete);
+      } else {
+        console.error("❌ Error al eliminar situaciones:", error);
+      }
+    }
+  }
+
+  const unsynced = await db.situations
+    .where("user_id")
+    .equals(user_id)
+    .filter((situation) => !situation.synced && !situation.pending_delete)
+    .toArray();
+
+  if (unsynced.length > 0) {
+    const payload = unsynced.map(({ synced, pending_delete, ...rest }) => rest);
+
+    const { error } = await supabase.from("situations").upsert(payload);
+
+    if (!error) {
+      await db.situations
+        .where("id")
+        .anyOf(unsynced.map((situation) => situation.id!))
+        .modify({ synced: true, pending_delete: false });
+    } else {
+      console.error("❌ Error al subir situaciones:", error);
+    }
+  }
+
+  const { data: cloudSituations, error: downloadError } = await supabase
+    .from("situations")
+    .select("*")
+    .eq("user_id", user_id);
+
+  if (!downloadError && cloudSituations) {
+    const remoteSituations = cloudSituations.filter(
+      (situation): situation is Situation & { id: string } =>
+        typeof situation.id === "string" && situation.id.length > 0
+    );
+
+    for (const situation of remoteSituations) {
+      const local = await db.situations.get(situation.id);
+      if (!local) {
+        await db.situations.add({ ...situation, synced: true, pending_delete: false });
+        continue;
+      }
+
+      if (local.pending_delete || !local.synced) {
+        continue;
+      }
+
+      await db.situations.put({ ...situation, synced: true, pending_delete: false });
+    }
+  }
+}
+
+export async function syncSections() {
+  const { data: userData } = await supabase.auth.getUser();
+  const user_id = userData?.user?.id;
+  if (!user_id) return;
+
+  const userSituations = await db.situations
+    .where("user_id")
+    .equals(user_id)
+    .filter((situation) => !situation.pending_delete)
+    .toArray();
+
+  const situationIds = userSituations
+    .map((situation) => situation.id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+
+  if (situationIds.length === 0) {
+    return;
+  }
+
+  const pendingDeletion = await db.sections
+    .filter(
+      (section) =>
+        Boolean(section.pending_delete) &&
+        situationIds.includes(section.situation_id)
+    )
+    .toArray();
+
+  if (pendingDeletion.length > 0) {
+    const idsToDelete = pendingDeletion
+      .map((section) => section.id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+
+    if (idsToDelete.length > 0) {
+      const { error } = await supabase
+        .from("sections")
+        .delete()
+        .in("id", idsToDelete)
+        .in("situation_id", situationIds);
+
+      if (!error) {
+        await db.sections.bulkDelete(idsToDelete);
+      } else {
+        console.error("❌ Error al eliminar secciones:", error);
+      }
+    }
+  }
+
+  const unsynced = await db.sections
+    .filter(
+      (section) =>
+        !section.synced &&
+        !section.pending_delete &&
+        situationIds.includes(section.situation_id)
+    )
+    .toArray();
+
+  if (unsynced.length > 0) {
+    const payload = unsynced.map(({ synced, pending_delete, ...rest }) => rest);
+
+    const { error } = await supabase.from("sections").upsert(payload);
+
+    if (!error) {
+      await db.sections
+        .where("id")
+        .anyOf(unsynced.map((section) => section.id!))
+        .modify({ synced: true, pending_delete: false });
+    } else {
+      console.error("❌ Error al subir secciones:", error);
+    }
+  }
+
+  const { data: cloudSections, error: downloadError } = await supabase
+    .from("sections")
+    .select("*")
+    .in("situation_id", situationIds);
+
+  if (!downloadError && cloudSections) {
+    const remoteSections = cloudSections.filter(
+      (section): section is Section & { id: string } =>
+        typeof section.id === "string" && section.id.length > 0
+    );
+
+    for (const section of remoteSections) {
+      const local = await db.sections.get(section.id);
+      if (!local) {
+        await db.sections.add({ ...section, synced: true, pending_delete: false });
+        continue;
+      }
+
+      if (local.pending_delete || !local.synced) {
+        continue;
+      }
+
+      await db.sections.put({ ...section, synced: true, pending_delete: false });
+    }
+  }
+}
+
+export async function syncTags() {
+  const { data: userData } = await supabase.auth.getUser();
+  const user_id = userData?.user?.id;
+  if (!user_id) return;
+
+  const userSituations = await db.situations
+    .where("user_id")
+    .equals(user_id)
+    .filter((situation) => !situation.pending_delete)
+    .toArray();
+
+  const situationIds = userSituations
+    .map((situation) => situation.id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+
+  if (situationIds.length === 0) {
+    return;
+  }
+
+  const relevantSections = await db.sections
+    .filter((section) => situationIds.includes(section.situation_id))
+    .toArray();
+
+  const sectionIds = relevantSections
+    .map((section) => section.id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+
+  if (sectionIds.length === 0) {
+    return;
+  }
+
+  const pendingDeletion = await db.tags
+    .filter((tag) => Boolean(tag.pending_delete) && sectionIds.includes(tag.section_id))
+    .toArray();
+
+  if (pendingDeletion.length > 0) {
+    const idsToDelete = pendingDeletion
+      .map((tag) => tag.id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+
+    if (idsToDelete.length > 0) {
+      const { error } = await supabase
+        .from("tags")
+        .delete()
+        .in("id", idsToDelete)
+        .in("section_id", sectionIds);
+
+      if (!error) {
+        await db.tags.bulkDelete(idsToDelete);
+      } else {
+        console.error("❌ Error al eliminar etiquetas:", error);
+      }
+    }
+  }
+
+  const unsynced = await db.tags
+    .filter(
+      (tag) =>
+        !tag.synced &&
+        !tag.pending_delete &&
+        sectionIds.includes(tag.section_id)
+    )
+    .toArray();
+
+  if (unsynced.length > 0) {
+    const payload = unsynced.map(({ synced, pending_delete, ...rest }) => rest);
+
+    const { error } = await supabase.from("tags").upsert(payload);
+
+    if (!error) {
+      await db.tags
+        .where("id")
+        .anyOf(unsynced.map((tag) => tag.id!))
+        .modify({ synced: true, pending_delete: false });
+    } else {
+      console.error("❌ Error al subir etiquetas:", error);
+    }
+  }
+
+  const { data: cloudTags, error: downloadError } = await supabase
+    .from("tags")
+    .select("*")
+    .in("section_id", sectionIds);
+
+  if (!downloadError && cloudTags) {
+    const remoteTags = cloudTags.filter(
+      (tag): tag is Tag & { id: string } =>
+        typeof tag.id === "string" && tag.id.length > 0
+    );
+
+    for (const tag of remoteTags) {
+      const local = await db.tags.get(tag.id);
+      if (!local) {
+        await db.tags.add({ ...tag, synced: true, pending_delete: false });
+        continue;
+      }
+
+      if (local.pending_delete || !local.synced) {
+        continue;
+      }
+
+      await db.tags.put({ ...tag, synced: true, pending_delete: false });
+    }
   }
 }
 
@@ -352,3 +642,5 @@ export async function syncMatches(teamId: string) {
     console.log("⬇️ Partidos descargados desde Supabase");
   }
 }
+
+

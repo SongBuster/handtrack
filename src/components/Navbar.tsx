@@ -61,6 +61,10 @@ export default function Navbar() {
         db.teams.clear(),
         db.players.clear(),
         db.matches.clear(),
+        db.situations.clear(),
+        db.sections.clear(),
+        db.tags.clear(),
+        db.match_tag_configurations.clear(),
         // si más adelante añadimos plays u otras tablas, también aquí
       ]);
       console.log("🧹 Datos locales limpiados");
@@ -80,6 +84,7 @@ export default function Navbar() {
           {renderNavLink("/", "Equipos")}
           {renderNavLink("/players", "Jugadores", true)}
           {renderNavLink("/matches", "Partidos", true)}
+          {renderNavLink("/situations", "Etiquetas", false)}
         </div>
         <p
           className={`text-xs ${
