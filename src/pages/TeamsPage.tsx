@@ -91,7 +91,7 @@ export default function TeamsPage() {
     const newTeam = {
       id: crypto.randomUUID(),
       name: name.trim(),
-      short_name: shortName.trim() || undefined,
+      short_name: shortName.trim().toUpperCase() || undefined,
       user_id: user_id,
       synced: false,
       pending_delete: false,
@@ -113,7 +113,7 @@ export default function TeamsPage() {
   function startEditing(team: Team) {
     setEditingId(team.id ?? null);
     setEditingName(team.name);
-    setEditingShortName(team.short_name ?? "");
+    setEditingShortName(team.short_name?.toUpperCase() ?? "");
   }
 
   function cancelEditing() {
@@ -128,7 +128,7 @@ export default function TeamsPage() {
 
     await db.teams.update(teamId, {
       name: editingName.trim(),
-      short_name: editingShortName.trim() || undefined,
+      short_name: editingShortName.trim().toUpperCase() || undefined,
       synced: false,
     });
 
@@ -191,7 +191,7 @@ export default function TeamsPage() {
             onChange={(e) => setName(e.target.value)}
           />
           <input
-            className="border rounded px-2 py-1 w-24"
+            className="border rounded px-2 py-1 w-24 uppercase"
             placeholder="Abrev."
             value={shortName}
             onChange={(e) => setShortName(e.target.value)}
@@ -227,7 +227,7 @@ export default function TeamsPage() {
                     onChange={(e) => setEditingName(e.target.value)}
                   />
                   <input
-                    className="border rounded px-2 py-1 w-24"
+                    className="border rounded px-2 py-1 w-24 uppercase"
                     value={editingShortName}
                     onChange={(e) => setEditingShortName(e.target.value)}
                   />

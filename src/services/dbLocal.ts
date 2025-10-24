@@ -17,6 +17,7 @@ export interface Player {
   position?: string;
   active?: boolean;
   synced?: boolean;
+  pending_delete?: boolean;
 }
 
 export interface Match {
@@ -79,6 +80,26 @@ export class HandtrackDB extends Dexie {
             }
             if (typeof team.pending_delete === "undefined") {
               team.pending_delete = false;
+            }
+          });
+      });
+      
+    this.version(4)
+      .stores({
+        teams: "id, user_id, name",
+        players: "id, team_id, number, name, active",
+        matches: "id, my_team_id, rival_name, is_home, active, date",
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table("players")
+          .toCollection()
+          .modify((player: Player) => {
+            if (typeof player.synced === "undefined") {
+              player.synced = false;
+            }
+            if (typeof player.pending_delete === "undefined") {
+              player.pending_delete = false;
             }
           });
       });
