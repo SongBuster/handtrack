@@ -34,11 +34,56 @@ export interface Match {
   pending_delete?: boolean;
 }
 
+export type AutomaticOutcome = "positive" | "negative";
+
+export interface Situation {
+  id?: string;
+  name: string;
+  next_situation_id?: string | null;
+  user_id?: string;
+  synced?: boolean;
+  pending_delete?: boolean;
+}
+
+export interface Section {
+  id?: string;
+  situation_id: string;
+  name: string;
+  remember_selection?: boolean;
+  synced?: boolean;
+  pending_delete?: boolean;
+}
+
+export interface Tag {
+  id?: string;
+  section_id: string;
+  name: string;
+  highlighted?: boolean;
+  default_selected?: boolean;
+  positive_value?: number;
+  negative_value?: number;
+  automatic_outcome?: AutomaticOutcome | null;
+  play_finishes?: boolean;
+  synced?: boolean;
+  pending_delete?: boolean;
+}
+
+export interface MatchTagConfiguration {
+  id?: string;
+  match_id: string;
+  tag_id: string;
+  synced?: boolean;
+  pending_delete?: boolean;
+}
+
 export class HandtrackDB extends Dexie {
   teams!: Table<Team, string>;
   players!: Table<Player, string>;
   matches!: Table<Match, string>;
-  // ...otras tablas (plays, players, etc.)
+  situations!: Table<Situation, string>;
+  sections!: Table<Section, string>;
+  tags!: Table<Tag, string>;
+  match_tag_configurations!: Table<MatchTagConfiguration, string>;  
 
   constructor() {
     super("handtrackDB");
@@ -124,6 +169,59 @@ export class HandtrackDB extends Dexie {
             }
           });
       });
+
+    this.version(6)
+      .stores({
+        teams: "id, user_id, name",
+        players: "id, team_id, number, name, active",
+        matches: "id, my_team_id, rival_name, is_home, active, date",
+        situations: "id, name, next_situation_id",
+        sections: "id, situation_id, name",
+        tags: "id, section_id, name, highlighted",
+        match_tag_configurations: "id, match_id, tag_id",
+      })
+      .upgrade(async (tx) => {
+        const tablesToInitialize = [
+          { name: "situations", defaults: { synced: false, pending_delete: false } },
+          { name: "sections", defaults: { synced: false, pending_delete: false, remember_selection: false } },
+          {
+            name: "tags",
+            defaults: {
+              synced: false,
+              pending_delete: false,
+              highlighted: false,
+              default_selected: false,
+              positive_value: 0,
+              negative_value: 0,
+              play_finishes: false,
+            },
+          },
+          { name: "match_tag_configurations", defaults: { synced: false, pending_delete: false } },
+        ] as const;
+
+        for (const table of tablesToInitialize) {
+          await tx
+            .table(table.name)
+            .toCollection()
+            .modify((record: Record<string, unknown>) => {
+              for (const [key, value] of Object.entries(table.defaults)) {
+                if (typeof record[key] === "undefined") {
+                  record[key] = value;
+                }
+              }
+            });
+        }
+      });
+
+    this.version(7).stores({
+      teams: "id, user_id, name",
+      players: "id, team_id, number, name, active",
+      matches: "id, my_team_id, rival_name, is_home, active, date",
+      situations: "id, user_id, name, next_situation_id",
+      sections: "id, situation_id, name",
+      tags: "id, section_id, name, highlighted",
+      match_tag_configurations: "id, match_id, tag_id",
+    });
   }
 }
 
