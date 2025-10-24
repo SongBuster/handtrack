@@ -1,4 +1,4 @@
-import { db , type Player} from "./dbLocal";
+import { db , type Player, type Match} from "./dbLocal";
 import { supabase } from "./dbCloud";
 
 export async function syncTeams() {
@@ -220,5 +220,135 @@ export async function syncPlayers(teamId: string) {
     });
 
     console.log("⬇️ Jugadores descargados desde Supabase");
+  }
+}
+
+export async function syncMatches(teamId: string) {
+  const team = await db.teams.get(teamId);
+  if (!team?.id) return;
+
+  const { data: userData } = await supabase.auth.getUser();
+  const user_id = userData?.user?.id;
+  if (!user_id || team.user_id !== user_id) {
+    return;
+  }
+
+  const pendingDeletion = await db.matches
+    .where("my_team_id")
+    .equals(teamId)
+    .filter((match) => Boolean(match.pending_delete))
+    .toArray();
+
+  if (pendingDeletion.length > 0) {
+    const idsToDelete = pendingDeletion
+      .map((match) => match.id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+
+    if (idsToDelete.length > 0) {
+      const { error } = await supabase
+        .from("matches")
+        .delete()
+        .in("id", idsToDelete)
+        .eq("my_team_id", teamId);
+
+      if (!error) {
+        await db.matches.bulkDelete(idsToDelete);
+        console.log("✅ Partidos eliminados en Supabase");
+      } else {
+        console.error("❌ Error al eliminar partidos:", error);
+      }
+    } else {
+      await db.matches
+        .where("my_team_id")
+        .equals(teamId)
+        .filter((match) => Boolean(match.pending_delete) && !match.id)
+        .delete();
+    }
+  }
+
+  const unsynced = await db.matches
+    .where("my_team_id")
+    .equals(teamId)
+    .filter((match) => !match.synced && !match.pending_delete)
+    .toArray();
+
+  if (unsynced.length > 0) {
+    const payload = unsynced.map(({ synced, pending_delete, ...rest }) => rest);
+
+    const { error } = await supabase.from("matches").upsert(payload);
+
+    if (!error) {
+      await db.matches
+        .where("id")
+        .anyOf(unsynced.map((match) => match.id!))
+        .modify({ synced: true, pending_delete: false });
+      console.log("✅ Partidos sincronizados");
+    } else {
+      console.error("❌ Error al subir partidos:", error);
+    }
+  }
+
+  const { data: cloudMatches, error: downloadError } = await supabase
+    .from("matches")
+    .select("*")
+    .eq("my_team_id", teamId);
+
+  if (!downloadError && cloudMatches) {
+    const remoteMatches = cloudMatches.filter(
+      (match): match is Match & { id: string } =>
+        typeof match.id === "string" && match.id.length > 0
+    );
+
+    await db.transaction("rw", db.matches, async () => {
+      const localMatches = await db.matches
+        .where("my_team_id")
+        .equals(teamId)
+        .toArray();
+
+      const unsyncedIds = new Set(
+        localMatches
+          .filter((match) => match.synced === false)
+          .map((match) => match.id)
+          .filter((id): id is string => typeof id === "string" && id.length > 0)
+      );
+
+      const pendingIds = new Set(
+        localMatches
+          .filter((match) => match.pending_delete === true)
+          .map((match) => match.id)
+          .filter((id): id is string => typeof id === "string" && id.length > 0)
+      );
+
+      const remoteIds = new Set(remoteMatches.map((match) => match.id));
+
+      for (const match of remoteMatches) {
+        if (pendingIds.has(match.id) || unsyncedIds.has(match.id)) {
+          continue;
+        }
+
+        await db.matches.put({
+          ...match,
+          synced: true,
+          pending_delete: false,
+        });
+      }
+
+      const deletableIds = localMatches
+        .filter(
+          (match): match is Match & { id: string } =>
+            typeof match.id === "string" &&
+            match.id.length > 0 &&
+            !pendingIds.has(match.id) &&
+            !unsyncedIds.has(match.id) &&
+            !remoteIds.has(match.id)
+        )
+        .map((match) => match.id);
+
+      if (deletableIds.length > 0) {
+        await db.matches.bulkDelete(deletableIds);
+      }
+    });
+
+    console.log("⬇️ Partidos descargados desde Supabase");
   }
 }
