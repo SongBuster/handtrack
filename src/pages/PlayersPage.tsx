@@ -35,6 +35,8 @@ const POSITIONS = [
   "Primera Línea",
 ];
 
+type ModalMode = "create" | "edit";
+
 export default function PlayersPage() {
   const { selectedTeam } = useSelectedTeam();
 
