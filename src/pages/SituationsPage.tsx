@@ -1,7 +1,8 @@
-import type { FormEvent, ReactNode } from "react";
+import type { FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 import Navbar from "../components/Navbar";
 import LoadingIndicator from "../components/LoadingIndicator";
+import Modal from "../components/Modal";
 import {
   db,
   type Situation,
@@ -39,39 +40,6 @@ interface TagFormState {
 }
 
 type ModalMode = "create" | "edit";
-
-interface ModalProps {
-  title: string;
-  onClose: () => void;
-  children: ReactNode;
-}
-
-function Modal({ title, onClose, children }: ModalProps) {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-2xl rounded-lg bg-white shadow-xl"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b px-4 py-3">
-          <h3 className="text-lg font-semibold">{title}</h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded p-1 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
-            aria-label="Cerrar"
-          >
-            ×
-          </button>
-        </div>
-        <div className="px-4 py-5">{children}</div>
-      </div>
-    </div>
-  );
-}
 
 const defaultSituationForm: SituationFormState = {
   name: "",
@@ -754,7 +722,7 @@ export default function SituationsPage() {
         <Navbar />
         <LoadingIndicator
           className="min-h-[50vh]"
-          message="Cargando situaciones..."
+          message="Cargando etiquetas..."
         />
       </>
     );

@@ -1,14 +1,10 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ChangeEvent,
-} from "react";
+import type { FormEvent, ChangeEvent } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
 import Navbar from "../components/Navbar";
 import { useSelectedTeam } from "../context/SelectedTeamContext";
 import LoadingIndicator from "../components/LoadingIndicator";
+import Modal from "../components/Modal";
 import { db, type Match } from "../services/dbLocal";
 import { syncMatches } from "../services/syncQueue";
 
@@ -28,6 +24,8 @@ const INITIAL_FORM_STATE: MatchFormState = {
   is_home: "home",
 };
 
+type ModalMode = "create" | "edit";
+
 function normalizeOptional(value: string) {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
@@ -36,14 +34,13 @@ function normalizeOptional(value: string) {
 export default function MatchesPage() {
   const { selectedTeam } = useSelectedTeam();
 
-    const [matches, setMatches] = useState<Match[]>([]);
+  const [matches, setMatches] = useState<Match[]>([]);
+  const [matchForm, setMatchForm] = useState<MatchFormState>(INITIAL_FORM_STATE);
+  const [modalMode, setModalMode] = useState<ModalMode>("create");
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [activeMatchId, setActiveMatchId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [formState, setFormState] =
-    useState<MatchFormState>(INITIAL_FORM_STATE);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editingState, setEditingState] =
-    useState<MatchFormState>(INITIAL_FORM_STATE);
   const [sortBy, setSortBy] = useState<"date" | "rival">("date");
 
   const loadMatches = useCallback(async () => {
@@ -95,20 +92,15 @@ export default function MatchesPage() {
     };
   }, [loadMatches, selectedTeam?.id, syncMatchesForTeam]);
 
-  useEffect(() => {
-    if (editingId && !matches.some((match) => match.id === editingId)) {
-      setEditingId(null);
-      setEditingState(INITIAL_FORM_STATE);
-    }
-  }, [matches, editingId]);
+  if (!selectedTeam) {
+    return <Navigate to="/" replace />;
+  }
 
   const sortedMatches = useMemo(() => {
     const sorted = [...matches];
 
-    if (sortBy === "rival") {
-      sorted.sort((a, b) =>
-        (a.rival_name ?? "").localeCompare(b.rival_name ?? "")
-      );
+    if (sortBy === "rival") { 
+      sorted.sort((a, b) =>  (a.rival_name ?? "").localeCompare(b.rival_name ?? ""));
     } else {
       sorted.sort((a, b) => {
         const aDate = a.date ?? "";
@@ -122,104 +114,89 @@ export default function MatchesPage() {
 
     return sorted;
   }, [matches, sortBy]);
-  
-  if (!selectedTeam) {
-    return <Navigate to="/" replace />;
-  }
 
-  type MatchFormChangeHandler = <K extends keyof MatchFormState>(
-    field: K,
-    value: MatchFormState[K]
-  ) => void;
-
-  const handleFormChange: MatchFormChangeHandler = (field, value) => {
-    setFormState((prev) => ({ ...prev, [field]: value }));
+  const openCreateModal = () => {
+    setModalMode("create");
+    setMatchForm(INITIAL_FORM_STATE);
+    setActiveMatchId(null);
+    setIsModalOpen(true);
   };
 
-  const handleEditingChange: MatchFormChangeHandler = (field, value) => {
-    setEditingState((prev) => ({ ...prev, [field]: value }));
-  };
-
-  const handleBooleanChange = (
-    event: ChangeEvent<HTMLInputElement>,
-    handler: MatchFormChangeHandler
-  ) => {
-    const value = event.target.value === "home" ? "home" : "away";
-    handler("is_home", value as MatchFormState["is_home"]);
-  };
-
-  const addMatch = async () => {
-    const rival = formState.rival_name.trim().toUpperCase();
-
-    if (!selectedTeam?.id || rival.length === 0) {
-      return;
-    }
-
-    setIsProcessing(true);
-    try {
-      await db.matches.add({
-        id: crypto.randomUUID(),
-        my_team_id: selectedTeam.id,
-        rival_name: rival,
-        is_home: formState.is_home === "home",
-        date: formState.date || undefined,
-        location: normalizeOptional(formState.location),
-        competition: normalizeOptional(formState.competition),
-        active: true,
-        current_time_ms: 0,
-        synced: false,
-        pending_delete: false,
-      });
-
-      await loadMatches();
-      await syncMatchesForTeam();
-      await loadMatches();
-      setFormState(INITIAL_FORM_STATE);
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const startEditing = (match: Match) => {
-    setEditingId(match.id ?? null);
-    setEditingState({
+  const openEditModal = (match: Match) => {
+    setModalMode("edit");
+    setMatchForm({
       rival_name: match.rival_name ?? "",
       date: match.date ?? "",
       location: match.location ?? "",
       competition: match.competition ?? "",
       is_home: match.is_home ? "home" : "away",
     });
+    setActiveMatchId(match.id ?? null);
+    setIsModalOpen(true);
   };
 
-  const cancelEditing = () => {
-    setEditingId(null);
-    setEditingState(INITIAL_FORM_STATE);
+  const closeModal = () => {
+    setIsModalOpen(false);
+    setActiveMatchId(null);
+    setMatchForm(INITIAL_FORM_STATE);  
   };
 
-  const saveMatch = async () => {
-    if (!editingId) return;
+  const handleChange = <K extends keyof MatchFormState>(
+    field: K,
+    value: MatchFormState[K],
+  ) => {
+    setMatchForm((prev) => ({ ...prev, [field]: value }));
+  };
 
-    const rival = editingState.rival_name.trim().toUpperCase();
-    if (rival.length === 0) {
+  const handleHomeChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const value = event.target.value === "home" ? "home" : "away";
+    handleChange("is_home", value);
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    const rival = matchForm.rival_name.trim().toUpperCase();
+    if (!selectedTeam?.id || rival.length === 0) {
       return;
     }
 
     setIsProcessing(true);
     try {
-      await db.matches.update(editingId, {
-        rival_name: rival,
-        date: editingState.date || undefined,
-        location: normalizeOptional(editingState.location),
-        competition: normalizeOptional(editingState.competition),
-        is_home: editingState.is_home === "home",
-        synced: false,
-        pending_delete: false,
-      });
+      if (modalMode === "create") {
+        await db.matches.add({
+          id: crypto.randomUUID(),
+          my_team_id: selectedTeam.id,
+          rival_name: rival,
+          is_home: matchForm.is_home === "home",
+          date: matchForm.date || undefined,
+          location: normalizeOptional(matchForm.location),
+          competition: normalizeOptional(matchForm.competition),
+          active: true,
+          current_time_ms: 0,
+          synced: false,
+          pending_delete: false,
+        });
+      } else {
+        if (!activeMatchId) {
+          return;
+        }
+
+        await db.matches.update(activeMatchId, {
+          rival_name: rival,
+          date: matchForm.date || undefined,
+          location: normalizeOptional(matchForm.location),
+          competition: normalizeOptional(matchForm.competition),
+          is_home: matchForm.is_home === "home",
+          synced: false,
+          pending_delete: false,
+        });
+      }
 
       await loadMatches();
       await syncMatchesForTeam();
       await loadMatches();
-      cancelEditing();
+      closeModal();
     } finally {
       setIsProcessing(false);
     }
@@ -265,260 +242,118 @@ export default function MatchesPage() {
       setIsProcessing(false);
     }
   };
-  
+
+  const isSubmitDisabled =
+    isProcessing || !selectedTeam?.id || matchForm.rival_name.trim().length === 0;
+
   return (
     <>
       <Navbar />
-      <div className="max-w-4xl mx-auto p-4">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+      <div className="mx-auto max-w-4xl p-4">
+        <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-2xl font-bold">
               Partidos - {selectedTeam.short_name ?? selectedTeam.name}
             </h1>
-            <p className="text-gray-600 text-sm">
-              Gestiona los partidos programados y su estado.
-            </p>
+            <p className="text-sm text-gray-600">Gestiona los partidos programados y su estado.</p>
           </div>
 
           <div className="flex gap-2">
             <button
+              onClick={openCreateModal}
+              className="rounded bg-blue-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-600"
+              disabled={isProcessing}
+              type="button"
+            >
+              Crear partido
+            </button>
+
+            <button
               onClick={() => setSortBy("date")}
-              className={`px-3 py-1.5 rounded border text-sm ${
+              className={`rounded border px-3 py-1.5 text-sm ${
                 sortBy === "date"
-                  ? "bg-blue-500 text-white border-blue-500"
-                  : "bg-white text-gray-700 hover:bg-gray-100 border-gray-300"
+                  ? "border-blue-500 bg-blue-500 text-white"
+                  : "border-gray-300 bg-white text-gray-700 hover:bg-gray-100"
               }`}
+              type="button"
             >
               Ordenar por fecha
             </button>
 
             <button
               onClick={() => setSortBy("rival")}
-              className={`px-3 py-1.5 rounded border text-sm ${
+              className={`rounded border px-3 py-1.5 text-sm ${
                 sortBy === "rival"
-                  ? "bg-blue-500 text-white border-blue-500"
-                  : "bg-white text-gray-700 hover:bg-gray-100 border-gray-300"
+                  ? "border-blue-500 bg-blue-500 text-white"
+                  : "border-gray-300 bg-white text-gray-700 hover:bg-gray-100"
               }`}
+              type="button"
             >
               Ordenar por rival
             </button>
           </div>
         </div>
 
-        <div className="mb-8 rounded border border-gray-200 p-4 shadow-sm">
-          <h2 className="text-lg font-semibold mb-3">Añadir partido</h2>
-          <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
-            <input
-              className="border rounded px-3 py-2 uppercase"
-              placeholder="Rival"
-              value={formState.rival_name}
-              onChange={(e) => handleFormChange("rival_name", e.target.value)}
-            />
-
-            <div className="flex items-center gap-3">
-              <label className="text-sm font-medium text-gray-600">Local</label>
-              <input
-                type="radio"
-                name="new-match-home"
-                value="home"
-                checked={formState.is_home === "home"}
-                onChange={(event) => handleBooleanChange(event, handleFormChange)}
-              />
-              <label className="text-sm font-medium text-gray-600">Visitante</label>
-              <input
-                type="radio"
-                name="new-match-home"
-                value="away"
-                checked={formState.is_home === "away"}
-                onChange={(event) => handleBooleanChange(event, handleFormChange)}
-              />
-            </div>
-
-            <input
-              type="date"
-              className="border rounded px-3 py-2"
-              value={formState.date}
-              onChange={(e) => handleFormChange("date", e.target.value)}
-            />
-
-            <input
-              className="border rounded px-3 py-2"
-              placeholder="Competición"
-              value={formState.competition}
-              onChange={(e) => handleFormChange("competition", e.target.value)}
-            />
-
-            <input
-              className="border rounded px-3 py-2 sm:col-span-2"
-              placeholder="Lugar"
-              value={formState.location}
-              onChange={(e) => handleFormChange("location", e.target.value)}
-            />
-          </div>
-          <button
-            className="mt-4 bg-blue-500 text-white px-4 py-2 rounded"
-            onClick={() => void addMatch()}
-            disabled={isProcessing}
-          >
-            Añadir partido
-          </button>
-        </div>
-
         {isLoading ? (
-          <LoadingIndicator
-            className="min-h-[30vh]"
-            message="Cargando partidos..."
-          />
+          <LoadingIndicator className="min-h-[30vh]" message="Cargando partidos..." />
         ) : (
           <div className="space-y-4">
             {sortedMatches.length === 0 ? (
-              <p className="text-gray-500">
-                Todavía no hay partidos registrados.
-              </p>
+              <p className="text-gray-500">Todavía no hay partidos registrados.</p>
             ) : (
-              <ul className="divide-y rounded border border-gray-200">
+              <ul className="divide-y rounded border border-gray-200 bg-white">
                 {sortedMatches.map((match) => (
-                  <li
-                    key={match.id}
-                    className={`px-4 transition-all duration-300 ${
-                      editingId === match.id ? "py-5 bg-gray-50" : "py-3"
-                    }`}
-                  >
-                    {editingId === match.id ? (
-                      <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
-                        <input
-                          className="border rounded px-3 py-2 uppercase"
-                          placeholder="Rival"
-                          value={editingState.rival_name}
-                          onChange={(e) =>
-                            handleEditingChange("rival_name", e.target.value)
-                          }
-                        />
-
-                        <div className="flex items-center gap-3">
-                          <label className="text-sm font-medium text-gray-600">
-                            Local
-                          </label>
-                          <input
-                            type="radio"
-                            name={`edit-match-home-${match.id}`}
-                            value="home"
-                            checked={editingState.is_home === "home"}
-                            onChange={(event) =>
-                              handleBooleanChange(event, handleEditingChange)
-                            }
-                          />
-                          <label className="text-sm font-medium text-gray-600">
-                            Visitante
-                          </label>
-                          <input
-                            type="radio"
-                            name={`edit-match-home-${match.id}`}
-                            value="away"
-                            checked={editingState.is_home === "away"}
-                            onChange={(event) =>
-                              handleBooleanChange(event, handleEditingChange)
-                            }
-                          />
-                        </div>
-
-                        <input
-                          type="date"
-                          className="border rounded px-3 py-2"
-                          value={editingState.date}
-                          onChange={(e) =>
-                            handleEditingChange("date", e.target.value)
-                          }
-                        />
-
-                        <input
-                          className="border rounded px-3 py-2"
-                          placeholder="Competición"
-                          value={editingState.competition}
-                          onChange={(e) =>
-                            handleEditingChange("competition", e.target.value)
-                          }
-                        />
-
-                        <input
-                          className="border rounded px-3 py-2 sm:col-span-2"
-                          placeholder="Lugar"
-                          value={editingState.location}
-                          onChange={(e) =>
-                            handleEditingChange("location", e.target.value)
-                          }
-                        />
-
-                        <div className="flex gap-2 sm:col-span-2">
-                          <button
-                            className="bg-green-500 text-white px-3 py-2 rounded"
-                            onClick={() => void saveMatch()}
-                            disabled={isProcessing}
-                          >
-                            Guardar
-                          </button>
-                          <button
-                            className="border px-3 py-2 rounded"
-                            onClick={cancelEditing}
-                            disabled={isProcessing}
-                          >
-                            Cancelar
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h3 className="text-lg font-semibold">
-                              {match.rival_name}
-                            </h3>
-                            {match.active ? null : (
-                              <span className="text-xs bg-gray-800 text-white px-2 py-1 rounded">
-                                Finalizado
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-sm text-gray-600">
-                            {match.competition || "Competición pendiente"}
-                          </p>
-                          <p className="text-sm text-gray-500">
-                            {match.date
-                              ? new Date(match.date).toLocaleDateString()
-                              : "Fecha pendiente"}
-                            {" • "}
-                            {match.is_home ? "Local" : "Visitante"}
-                            {match.location ? ` • ${match.location}` : ""}
-                          </p>
-                        </div>
-
-                        <div className="flex gap-2 flex-wrap">
-                          {match.active && (
-                            <button
-                              className="text-green-600 hover:text-green-800 px-3 py-1 text-sm"
-                              onClick={() => void markAsFinished(match)}
-                              disabled={isProcessing}
-                            >
-                              Marcar finalizado
-                            </button>
+                  <li key={match.id} className="px-4 py-3">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-lg font-semibold text-gray-900">{match.rival_name}</h3>
+                          {match.active ? null : (
+                            <span className="rounded bg-gray-800 px-2 py-1 text-xs text-white">Finalizado</span>
                           )}
+                        </div>
+                        <p className="text-sm text-gray-600">
+                          {match.competition || "Competición pendiente"}
+                        </p>
+                        <p className="text-sm text-gray-500">
+                          {match.date
+                            ? new Date(match.date).toLocaleDateString()
+                            : "Fecha pendiente"}
+                          {" • "}
+                          {match.is_home ? "Local" : "Visitante"}
+                          {match.location ? ` • ${match.location}` : ""}
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        {match.active ? (                            
                           <button
-                            className="text-blue-600 hover:text-blue-800 px-3 py-1 text-sm"
-                            onClick={() => startEditing(match)}
+                            className="rounded px-3 py-1 text-sm font-medium text-green-600 hover:bg-green-50"
+                            onClick={() => void markAsFinished(match)}
                             disabled={isProcessing}
+                            type="button"
                           >
-                            Editar
+                            Marcar finalizado
                           </button>
-                          <button
-                            className="text-red-600 hover:text-red-800 px-3 py-1 text-sm"
-                            onClick={() => void deleteMatch(match)}
-                            disabled={isProcessing}
-                          >
-                            Eliminar
-                          </button>
+                        ) : null}
+                         <button
+                          className="rounded px-3 py-1 text-sm font-medium text-blue-600 hover:bg-blue-50"
+                          onClick={() => openEditModal(match)}
+                          disabled={isProcessing}
+                          type="button"
+                        >
+                          Editar
+                        </button>
+                        <button
+                          className="rounded px-3 py-1 text-sm font-medium text-red-600 hover:bg-red-50"
+                          onClick={() => void deleteMatch(match)}
+                          disabled={isProcessing}
+                          type="button"
+                        >
+                          Eliminar
+                        </button>
                         </div>
                       </div>
-                    )}
                   </li>
                 ))}
               </ul>
@@ -527,13 +362,120 @@ export default function MatchesPage() {
         )}
 
         {isProcessing && !isLoading ? (
-          <LoadingIndicator
-            className="mt-8"
-            message="Procesando datos..."
-            aria-live="assertive"
-          />
+          <LoadingIndicator className="mt-8" message="Procesando datos..." aria-live="assertive" />
         ) : null}
       </div>
+
+      {isModalOpen ? (
+        <Modal
+          title={modalMode === "create" ? "Crear partido" : "Editar partido"}
+          onClose={closeModal}
+        >
+          <form className="space-y-4" onSubmit={handleSubmit}>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="flex flex-col gap-2 sm:col-span-2">
+                <label className="text-sm font-medium text-gray-700" htmlFor="match-rival">
+                  Rival
+                </label>
+                <input
+                  id="match-rival"
+                  className="rounded border px-3 py-2 uppercase"
+                  placeholder="Rival"
+                  value={matchForm.rival_name}
+                  onChange={(event) => handleChange("rival_name", event.target.value)}
+                  autoFocus
+                />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <label className="text-sm font-medium text-gray-700" htmlFor="match-date">
+                  Fecha
+                </label>
+                <input
+                  id="match-date"
+                  type="date"
+                  className="rounded border px-3 py-2"
+                  value={matchForm.date}
+                  onChange={(event) => handleChange("date", event.target.value)}
+                />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <span className="text-sm font-medium text-gray-700">Condición</span>
+                <div className="flex items-center gap-3 rounded border px-3 py-2">
+                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                    <input
+                      type="radio"
+                      name="match-home"
+                      value="home"
+                      checked={matchForm.is_home === "home"}
+                      onChange={handleHomeChange}
+                    />
+                    Local
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                    <input
+                      type="radio"
+                      name="match-home"
+                      value="away"
+                      checked={matchForm.is_home === "away"}
+                      onChange={handleHomeChange}
+                    />
+                    Visitante
+                  </label>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <label className="text-sm font-medium text-gray-700" htmlFor="match-competition">
+                  Competición
+                </label>
+                <input
+                  id="match-competition"
+                  className="rounded border px-3 py-2"
+                  placeholder="Competición"
+                  value={matchForm.competition}
+                  onChange={(event) => handleChange("competition", event.target.value)}
+                />
+              </div>
+
+              <div className="flex flex-col gap-2 sm:col-span-2">
+                <label className="text-sm font-medium text-gray-700" htmlFor="match-location">
+                  Lugar
+                </label>
+                <input
+                  id="match-location"
+                  className="rounded border px-3 py-2"
+                  placeholder="Lugar"
+                  value={matchForm.location}
+                  onChange={(event) => handleChange("location", event.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeModal}
+                className="rounded px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={isSubmitDisabled}
+                className={`rounded px-4 py-2 text-sm font-medium ${
+                  isSubmitDisabled
+                    ? "cursor-not-allowed bg-blue-200 text-blue-700"
+                    : "bg-blue-500 text-white transition-colors hover:bg-blue-600"
+                }`}
+              >
+                {modalMode === "create" ? "Crear" : "Guardar"}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      ) : null}
     </>
   );
 }

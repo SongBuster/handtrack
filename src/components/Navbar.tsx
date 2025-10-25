@@ -82,9 +82,10 @@ export default function Navbar() {
       <div className="flex flex-col gap-1">
         <div className="flex gap-2">
           {renderNavLink("/", "Equipos")}
+          {renderNavLink("/situations", "Etiquetas", false)}
           {renderNavLink("/players", "Jugadores", true)}
           {renderNavLink("/matches", "Partidos", true)}
-          {renderNavLink("/situations", "Etiquetas", false)}
+          
         </div>
         <p
           className={`text-xs ${

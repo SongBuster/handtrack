@@ -1,8 +1,10 @@
+import type { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
 import Navbar from "../components/Navbar";
 import { useSelectedTeam } from "../context/SelectedTeamContext";
 import LoadingIndicator from "../components/LoadingIndicator";
+import Modal from "../components/Modal";
 import { db, type Player } from "../services/dbLocal";
 import { syncPlayers } from "../services/syncQueue";
 import {
@@ -37,16 +39,13 @@ export default function PlayersPage() {
   const { selectedTeam } = useSelectedTeam();
 
   const [players, setPlayers] = useState<Player[]>([]);
-  const [formState, setFormState] =
-    useState<PlayerFormState>(INITIAL_FORM_STATE);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editingState, setEditingState] =
-    useState<PlayerFormState>(INITIAL_FORM_STATE);
+  const [formState, setFormState] = useState<PlayerFormState>(INITIAL_FORM_STATE);
+  const [modalMode, setModalMode] = useState<ModalMode>("create");
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [activePlayerId, setActivePlayerId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [sortBy, setSortBy] = useState<"number" | "name" | "position">(
-    "number"
-  );
+  const [sortBy, setSortBy] = useState<"number" | "name" | "position">("number");
 
   const sortedPlayers = useMemo(() => {
     const sorted = [...players];
@@ -56,9 +55,7 @@ export default function PlayersPage() {
         sorted.sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
         break;
       case "position":
-        sorted.sort((a, b) =>
-          (a.position ?? "").localeCompare(b.position ?? "")
-        );
+        sorted.sort((a, b) => (a.position ?? "").localeCompare(b.position ?? ""));
         break;
       default:
         sorted.sort((a, b) => (a.number ?? 0) - (b.number ?? 0));
@@ -67,10 +64,6 @@ export default function PlayersPage() {
 
     return sorted;
   }, [players, sortBy]);
-
-  const resetFormState = useCallback(() => {
-    setFormState(INITIAL_FORM_STATE);
-  }, []);
 
   const loadPlayers = useCallback(async () => {
     if (!selectedTeam?.id) {
@@ -122,29 +115,39 @@ export default function PlayersPage() {
     };
   }, [loadPlayers, selectedTeam?.id, syncPlayersForTeam]);
 
-  useEffect(() => {
-    if (editingId && !players.some((player) => player.id === editingId)) {
-      setEditingId(null);
-      setEditingState(INITIAL_FORM_STATE);
-    }
-  }, [players, editingId]);
-
   if (!selectedTeam) {
     return <Navigate to="/" replace />;
   }
 
-  const handleFormChange = <K extends keyof PlayerFormState>(
-    field: K,
-    value: PlayerFormState[K]
-  ) => {
-    setFormState((prev) => ({ ...prev, [field]: value }));
+  const openCreateModal = () => {
+    setModalMode("create");
+    setFormState(INITIAL_FORM_STATE);
+    setActivePlayerId(null);
+    setIsModalOpen(true);
   };
 
-  const handleEditingChange = <K extends keyof PlayerFormState>(
+  const openEditModal = (player: Player) => {
+    setModalMode("edit");
+    setFormState({
+      number: String(player.number ?? ""),
+      name: player.name ?? "",
+      position: player.position ?? "",
+    });
+    setActivePlayerId(player.id ?? null);
+    setIsModalOpen(true);
+  };
+
+  const closeModal = () => {
+    setIsModalOpen(false);
+    setActivePlayerId(null);
+    setFormState(INITIAL_FORM_STATE);
+  };
+
+  const handleFormChange = <K extends keyof PlayerFormState>(
     field: K,
-    value: PlayerFormState[K]
+    value: PlayerFormState[K],
   ) => {
-    setEditingState((prev) => ({ ...prev, [field]: value }));
+    setFormState((prev) => ({ ...prev, [field]: value }));
   };
 
   const parseNumber = (value: string) => {
@@ -153,7 +156,9 @@ export default function PlayersPage() {
     return Number.isNaN(parsed) ? null : parsed;
   };
 
-  const addPlayer = async () => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
     const name = formState.name.trim().toUpperCase();
     const number = parseNumber(formState.number);
 
@@ -163,65 +168,36 @@ export default function PlayersPage() {
 
     setIsProcessing(true);
     try {
-      await db.players.add({
-        id: crypto.randomUUID(),
-        team_id: selectedTeam.id,
-        name,
-        number,
-        position: formState.position.trim() || undefined,
-        active: true,
-        synced: false,
-        pending_delete: false,
-      });
+      if (modalMode === "create") {
+        await db.players.add({
+          id: crypto.randomUUID(),
+          team_id: selectedTeam.id,
+          name,
+          number,
+          position: formState.position.trim() || undefined,
+          active: true,
+          synced: false,
+          pending_delete: false,
+        });
+      } else {
+        if (!activePlayerId) {
+          return;
+        }
+
+        await db.players.update(activePlayerId, {
+          name,
+          number,
+          position: formState.position.trim() || undefined,
+          active: true,
+          synced: false,
+          pending_delete: false,
+        });
+      }
 
       await loadPlayers();
       await syncPlayersForTeam();
       await loadPlayers();
-      resetFormState();
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const startEditing = (player: Player) => {
-    setEditingId(player.id ?? null);
-    setEditingState({
-      number: String(player.number ?? ""),
-      name: player.name ?? "",
-      position: player.position ?? "",
-    });
-  };
-
-  const cancelEditing = () => {
-    setEditingId(null);
-    setEditingState(INITIAL_FORM_STATE);
-  };
-
-  const savePlayer = async () => {
-    if (!editingId) return;
-
-    const name = editingState.name.trim().toUpperCase();
-    const number = parseNumber(editingState.number);
-
-    if (!name || number === null) {
-      return;
-    }
-
-    setIsProcessing(true);
-    try {
-      await db.players.update(editingId, {
-        name,
-        number,
-        position: editingState.position.trim() || undefined,
-        active: true,
-        synced: false,
-        pending_delete: false,
-      });
-
-      await loadPlayers();
-      await syncPlayersForTeam();
-      await loadPlayers();
-      cancelEditing();
+      closeModal();
     } finally {
       setIsProcessing(false);
     }
@@ -249,21 +225,34 @@ export default function PlayersPage() {
     }
   };
 
+    const isSubmitDisabled =
+    isProcessing ||
+    !selectedTeam?.id ||
+    formState.name.trim().length === 0 ||
+    parseNumber(formState.number) === null;
+
   return (
     <>
       <Navbar />
-      <div className="max-w-3xl mx-auto p-4">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+      <div className="mx-auto max-w-3xl p-4">
+        <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-2xl font-bold">
               Jugadores - {selectedTeam.short_name ?? selectedTeam.name}
             </h1>
-            <p className="text-gray-600 text-sm">
-              Gestiona el plantel del equipo seleccionado.
-            </p>
+            <p className="text-sm text-gray-600">Gestiona el plantel del equipo seleccionado.</p>
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={openCreateModal}
+              className="rounded bg-blue-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-600"
+              disabled={isProcessing}
+              type="button"
+            >
+              Añadir jugador
+            </button>
+
             <button
               onClick={async () => {
                 setIsProcessing(true);
@@ -273,17 +262,24 @@ export default function PlayersPage() {
                   setIsProcessing(false);
                 }
               }}
-              className="border border-gray-300 bg-gray-50 hover:bg-gray-100 text-gray-700 px-3 py-2 rounded text-sm"
+              className="rounded border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-100"
+              disabled={isProcessing}
+              type="button"
             >
               📤 Exportar
             </button>
 
-            <label className="border border-gray-300 bg-gray-50 hover:bg-gray-100 text-gray-700 px-3 py-2 rounded text-sm cursor-pointer">
+            <label
+              className={`rounded border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-100 ${
+                isProcessing ? "cursor-not-allowed opacity-60" : "cursor-pointer"
+              }`}
+            >
               📥 Importar
               <input
                 type="file"
                 accept="application/json"
                 className="hidden"
+                disabled={isProcessing}
                 onChange={async (e) => {
                   const file = e.target.files?.[0];
                   if (!file) return;
@@ -293,9 +289,7 @@ export default function PlayersPage() {
                     const { data: userData } = await supabase.auth.getUser();
                     const user_id = userData?.user?.id;
                     if (!user_id || !selectedTeam?.id) {
-                      alert(
-                        "❌ Falta usuario o equipo seleccionado. No se pudo importar."
-                      );
+                      alert("❌ Falta usuario o equipo seleccionado. No se pudo importar.");
                       return;
                     }
                     const count = await importTableFromJSON("players", file, {
@@ -308,18 +302,15 @@ export default function PlayersPage() {
                         name: p.name?.toString().trim().toUpperCase(),
                       }),
                     });
-
                     // 🔄 Recarga la lista local y sincroniza con Supabase
                     await loadPlayers();
                     await syncPlayersForTeam();
                     await loadPlayers();
-
                     alert(`✅ Importados ${count} jugadores`);
                   } catch (err: any) {
                     console.error("❌ Error al importar:", err);
                     alert(`❌ Error al importar: ${err.message}`);
                   } finally {
-                    // 🔁 Limpia el input para permitir volver a importar el mismo archivo si se quiere
                     setIsProcessing(false);
                     e.target.value = "";
                   }
@@ -329,186 +320,83 @@ export default function PlayersPage() {
           </div>
         </div>
 
-        <div className="mb-8 rounded border border-gray-200 p-4 shadow-sm">
-          <h2 className="text-lg font-semibold mb-3">Añadir jugador</h2>
-          <div className="flex flex-wrap gap-3">
-            <input
-              className="border rounded px-3 py-2 w-24"
-              placeholder="#"
-              inputMode="numeric"
-              value={formState.number}
-              onChange={(e) => handleFormChange("number", e.target.value)}
-            />
-            <input
-              className="border rounded px-3 py-2 flex-1 min-w-[10rem] uppercase"
-              placeholder="Nombre"
-              value={formState.name}
-              onChange={(e) => handleFormChange("name", e.target.value)}
-            />
-            <select
-              className="border rounded px-3 py-2 flex-1 min-w-[10rem]"
-              value={formState.position}
-              onChange={(e) => handleFormChange("position", e.target.value)}
-            >
-              <option value="">Selecciona posición</option>
-              {POSITIONS.map((pos) => (
-                <option key={pos} value={pos}>
-                  {pos}
-                </option>
-              ))}
-            </select>
-            <button
-              className="bg-blue-500 text-white px-4 py-2 rounded"
-              onClick={() => void addPlayer()}
-              disabled={isProcessing}
-            >
-              Añadir
-            </button>
-          </div>
-        </div>
-        {/* Botones de ordenación */}
-        <div className="flex gap-2 mb-6">
+        <div className="mb-6 flex gap-2">
           <button
             onClick={() => setSortBy("number")}
-            className={`px-3 py-1.5 rounded border text-sm ${
+            className={`rounded border px-3 py-1.5 text-sm ${
               sortBy === "number"
-                ? "bg-blue-500 text-white border-blue-500"
-                : "bg-white text-gray-700 hover:bg-gray-100 border-gray-300"
+                ? "border-blue-500 bg-blue-500 text-white"
+                : "border-gray-300 bg-white text-gray-700 hover:bg-gray-100"
             }`}
+            type="button"
           >
             Ordenar por dorsal
           </button>
 
           <button
             onClick={() => setSortBy("name")}
-            className={`px-3 py-1.5 rounded border text-sm ${
+            className={`rounded border px-3 py-1.5 text-sm ${
               sortBy === "name"
-                ? "bg-blue-500 text-white border-blue-500"
-                : "bg-white text-gray-700 hover:bg-gray-100 border-gray-300"
+                ? "border-blue-500 bg-blue-500 text-white"
+                : "border-gray-300 bg-white text-gray-700 hover:bg-gray-100"
             }`}
+            type="button"
           >
             Ordenar por nombre
           </button>
 
           <button
             onClick={() => setSortBy("position")}
-            className={`px-3 py-1.5 rounded border text-sm ${
+            className={`rounded border px-3 py-1.5 text-sm ${
               sortBy === "position"
-                ? "bg-blue-500 text-white border-blue-500"
-                : "bg-white text-gray-700 hover:bg-gray-100 border-gray-300"
+                ? "border-blue-500 bg-blue-500 text-white"
+                : "border-gray-300 bg-white text-gray-700 hover:bg-gray-100"
             }`}
+            type="button"
           >
             Ordenar por posición
           </button>
         </div>
 
         {isLoading ? (
-          <LoadingIndicator
-            className="min-h-[30vh]"
-            message="Cargando jugadores..."
-          />
+          <LoadingIndicator className="min-h-[30vh]" message="Cargando jugadores..."/>
         ) : (
           <div className="space-y-4">
             {sortedPlayers.length === 0 ? (
-              <p className="text-gray-500">
-                Todavía no hay jugadores registrados.
-              </p>
+               <p className="text-gray-500">Todavía no hay jugadores registrados.</p>
             ) : (
-              <ul className="divide-y rounded border border-gray-200">
+              <ul className="divide-y rounded border border-gray-200 bg-white">
                 {sortedPlayers.map((player) => (
-                  <li
-                    key={player.id}
-                    className={`px-4 transition-all duration-300 ${
-                      editingId === player.id ? "py-5 bg-gray-50" : "py-1"
-                    }`}
-                  >
-                    {editingId === player.id ? (
-                      <div className="flex flex-wrap items-center gap-3">
-                        <input
-                          className="border rounded px-3 py-2 w-24"
-                          placeholder="#"
-                          inputMode="numeric"
-                          value={editingState.number}
-                          onChange={(e) =>
-                            handleEditingChange("number", e.target.value)
-                          }
-                        />
-                        <input
-                          className="border rounded px-3 py-2 flex-1 min-w-[10rem] uppercase"
-                          placeholder="Nombre"
-                          value={editingState.name}
-                          onChange={(e) =>
-                            handleEditingChange("name", e.target.value)
-                          }
-                        />
-                        <select
-                          className="border rounded px-3 py-2 flex-1 min-w-[10rem]"
-                          value={editingState.position}
-                          onChange={(e) =>
-                            handleEditingChange("position", e.target.value)
-                          }
+                  <li key={player.id} className="px-4 py-3">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex items-center gap-3">
+                        <span className="w-12 text-right text-lg font-semibold text-gray-800">
+                          {player.number}
+                        </span>
+                        <span className="flex-1 font-medium text-gray-900">{player.name}</span>
+                        <span className="w-40 text-sm text-gray-600">
+                          {player.position || "—"}
+                        </span>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          className="rounded px-3 py-1 text-sm font-medium text-blue-600 hover:bg-blue-50"
+                          onClick={() => openEditModal(player)}
+                          disabled={isProcessing}
+                          type="button"
                         >
-                          <option value="">Selecciona posición</option>
-                          {POSITIONS.map((pos) => (
-                            <option key={pos} value={pos}>
-                              {pos}
-                            </option>
-                          ))}
-                        </select>
-
-                        <div className="flex gap-2">
-                          <button
-                            className="bg-green-500 text-white px-3 py-2 rounded"
-                            onClick={() => void savePlayer()}
-                            disabled={isProcessing}
-                          >
-                            Guardar
-                          </button>
-                          <button
-                            className="border px-3 py-2 rounded"
-                            onClick={cancelEditing}
-                            disabled={isProcessing}
-                          >
-                            Cancelar
-                          </button>
-                        </div>
+                          Editar
+                        </button>
+                        <button
+                          className="rounded px-3 py-1 text-sm font-medium text-red-600 hover:bg-red-50"
+                          onClick={() => void deletePlayer(player)}
+                          disabled={isProcessing}
+                          type="button"
+                        >
+                          Eliminar
+                        </button>
                       </div>
-                    ) : (
-                      <div className="flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap">
-                        {/* Información del jugador */}
-                        <div className="flex items-center w-full sm:w-auto flex-1">
-                          <span className="text-lg font-semibold w-12 text-right pr-2">
-                            {player.number}
-                          </span>
-
-                          <span className="font-medium flex-1">
-                            {player.name}
-                          </span>
-
-                          <span className="text-sm text-gray-600 w-40 text-left">
-                            {player.position || "—"}
-                          </span>
-                        </div>
-
-                        {/* Botones */}
-                        <div className="flex gap-2 shrink-0">
-                          <button
-                            className="text-blue-600 hover:text-blue-800 px-3 py-1 text-sm"
-                            onClick={() => startEditing(player)}
-                            disabled={isProcessing}
-                          >
-                            Editar
-                          </button>
-                          <button
-                            className="text-red-600 hover:text-red-800 px-3 py-1 text-sm"
-                            onClick={() => void deletePlayer(player)}
-                            disabled={isProcessing}
-                          >
-                            Eliminar
-                          </button>
-                        </div>
-                      </div>
-                    )}
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -517,13 +405,88 @@ export default function PlayersPage() {
         )}
 
         {isProcessing && !isLoading ? (
-          <LoadingIndicator
-            className="mt-8"
-            message="Procesando datos..."
-            aria-live="assertive"
-          />
+          <LoadingIndicator className="mt-8" message="Procesando datos..." aria-live="assertive" />
         ) : null}
       </div>
+
+      {isModalOpen ? (
+        <Modal
+          title={modalMode === "create" ? "Añadir jugador" : "Editar jugador"}
+          onClose={closeModal}
+        >
+          <form className="space-y-4" onSubmit={handleSubmit}>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="flex flex-col gap-2">
+                <label className="text-sm font-medium text-gray-700" htmlFor="player-number">
+                  Dorsal
+                </label>
+                <input
+                  id="player-number"
+                  className="rounded border px-3 py-2"
+                  placeholder="#"
+                  inputMode="numeric"
+                  value={formState.number}
+                  onChange={(event) => handleFormChange("number", event.target.value)}
+                  autoFocus
+                />
+              </div>
+
+              <div className="flex flex-col gap-2 sm:col-span-1">
+                <label className="text-sm font-medium text-gray-700" htmlFor="player-position">
+                  Posición
+                </label>
+                <select
+                  id="player-position"
+                  className="rounded border px-3 py-2"
+                  value={formState.position}
+                  onChange={(event) => handleFormChange("position", event.target.value)}
+                >
+                  <option value="">Selecciona posición</option>
+                  {POSITIONS.map((pos) => (
+                    <option key={pos} value={pos}>
+                      {pos}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <label className="text-sm font-medium text-gray-700" htmlFor="player-name">
+                Nombre
+              </label>
+              <input
+                id="player-name"
+                className="rounded border px-3 py-2 uppercase"
+                placeholder="Nombre"
+                value={formState.name}
+                onChange={(event) => handleFormChange("name", event.target.value)}
+              />
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeModal}
+                className="rounded px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={isSubmitDisabled}
+                className={`rounded px-4 py-2 text-sm font-medium ${
+                  isSubmitDisabled
+                    ? "cursor-not-allowed bg-blue-200 text-blue-700"
+                    : "bg-blue-500 text-white transition-colors hover:bg-blue-600"
+                }`}
+              >
+                {modalMode === "create" ? "Crear" : "Guardar"}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      ) : null}
     </>
   );
 }
