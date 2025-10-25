@@ -76,6 +76,50 @@ export interface MatchTagConfiguration {
   pending_delete?: boolean;
 }
 
+export interface Screen {
+  id?: string;
+  name: string;
+  show_players: boolean;
+  user_id?: string;
+  synced?: boolean;
+  pending_delete?: boolean;
+}
+
+export interface MatchScreen {
+  id?: string;
+  match_id: string;
+  screen_id: string;
+  synced?: boolean;
+  pending_delete?: boolean;
+}
+
+export interface ScreenSituation {
+  id?: string;
+  screen_id: string;
+  situation_id: string;
+  position: number;
+  synced?: boolean;
+  pending_delete?: boolean;
+}
+
+export interface ScreenSituationSection {
+  id?: string;
+  screen_situation_id: string;
+  section_id: string;
+  position: number;
+  synced?: boolean;
+  pending_delete?: boolean;
+}
+
+export interface ScreenSectionTag {
+  id?: string;
+  screen_section_id: string;
+  tag_id: string;
+  position: number;
+  synced?: boolean;
+  pending_delete?: boolean;
+}
+
 export class HandtrackDB extends Dexie {
   teams!: Table<Team, string>;
   players!: Table<Player, string>;
@@ -83,7 +127,11 @@ export class HandtrackDB extends Dexie {
   situations!: Table<Situation, string>;
   sections!: Table<Section, string>;
   tags!: Table<Tag, string>;
-  match_tag_configurations!: Table<MatchTagConfiguration, string>;  
+  screens!: Table<Screen, string>;
+  match_screens!: Table<MatchScreen, string>;
+  screen_situations!: Table<ScreenSituation, string>;
+  screen_situation_sections!: Table<ScreenSituationSection, string>;
+  screen_section_tags!: Table<ScreenSectionTag, string>; 
 
   constructor() {
     super("handtrackDB");
@@ -178,7 +226,6 @@ export class HandtrackDB extends Dexie {
         situations: "id, name, next_situation_id",
         sections: "id, situation_id, name",
         tags: "id, section_id, name, highlighted",
-        match_tag_configurations: "id, match_id, tag_id",
       })
       .upgrade(async (tx) => {
         const tablesToInitialize = [
@@ -195,8 +242,7 @@ export class HandtrackDB extends Dexie {
               negative_value: 0,
               play_finishes: false,
             },
-          },
-          { name: "match_tag_configurations", defaults: { synced: false, pending_delete: false } },
+          },          
         ] as const;
 
         for (const table of tablesToInitialize) {
@@ -220,7 +266,42 @@ export class HandtrackDB extends Dexie {
       situations: "id, user_id, name, next_situation_id",
       sections: "id, situation_id, name",
       tags: "id, section_id, name, highlighted",
-      match_tag_configurations: "id, match_id, tag_id",
+    });
+
+
+    this.version(8).stores({
+      teams: "id, user_id, name",
+      players: "id, team_id, number, name, active",
+      matches: "id, my_team_id, rival_name, is_home, active, date",
+      situations: "id, user_id, name, next_situation_id",
+      sections: "id, situation_id, name",
+      tags: "id, section_id, name, highlighted",
+      screens: "id, user_id, name, show_players",
+      match_screens: "id, match_id, screen_id",
+      screen_situations: "id, screen_id, situation_id, position",
+      screen_situation_sections: "id, screen_situation_id, section_id, position",
+      screen_section_tags: "id, screen_section_id, tag_id, position",
+    }).upgrade(async (tx) => {
+      const tablesToInitialize = [
+        { name: "screens", defaults: { synced: false, pending_delete: false, show_players: true } },
+        { name: "match_screens", defaults: { synced: false, pending_delete: false } },
+        { name: "screen_situations", defaults: { synced: false, pending_delete: false } },
+        { name: "screen_situation_sections", defaults: { synced: false, pending_delete: false } },
+        { name: "screen_section_tags", defaults: { synced: false, pending_delete: false } },
+      ] as const;
+
+      for (const table of tablesToInitialize) {
+        await tx
+          .table(table.name)
+          .toCollection()
+          .modify((record: Record<string, unknown>) => {
+            for (const [key, value] of Object.entries(table.defaults)) {
+              if (typeof record[key] === "undefined") {
+                record[key] = value;
+              }
+            }
+          });
+      }
     });
   }
 }

@@ -64,7 +64,11 @@ export default function Navbar() {
         db.situations.clear(),
         db.sections.clear(),
         db.tags.clear(),
-        db.match_tag_configurations.clear(),
+        db.screens.clear(),
+        db.match_screens.clear(),
+        db.screen_situations.clear(),
+        db.screen_situation_sections.clear(),
+        db.screen_section_tags.clear(),
         // si más adelante añadimos plays u otras tablas, también aquí
       ]);
       console.log("🧹 Datos locales limpiados");

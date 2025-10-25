@@ -1,4 +1,9 @@
 -- Borrado de todas las tablas en orden
+drop table if exists screen_section_tags cascade;
+drop table if exists screen_situation_sections cascade;
+drop table if exists screen_situations cascade;
+drop table if exists match_screens cascade;
+drop table if exists screens cascade;
 drop table if exists macthes cascade;
 drop table if exists players cascade;
 drop table if exists teams cascade;
@@ -6,7 +11,6 @@ drop table if exists match_tag_configurations cascade;
 drop table if exists tags cascade;
 drop table if exists sections cascade;
 drop table if exists situations cascade;
-
 
 -- Tabla: teams
 create table if not exists public.teams (
@@ -50,27 +54,6 @@ create table if not exists public.matches (
 create index if not exists idx_matches_my_team_id on public.matches(my_team_id);
 create index if not exists idx_matches_active on public.matches(active);
 
--- Activar Row Level Security
-alter table public.teams enable row level security;
-
--- Permitir acceso solo a sus propios registros
-create policy "Users can view their own teams"
-  on public.teams for select
-  using (auth.uid() = user_id);
-
-create policy "Users can insert their own teams"
-  on public.teams for insert
-  with check (auth.uid() = user_id);
-
-create policy "Users can update their own teams"
-  on public.teams for update
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
-
-create policy "Users can delete their own teams"
-  on public.teams
-  for delete
-  using (auth.uid() = user_id);
 
 -- Tabla: situations
 create table if not exists public.situations (
@@ -110,20 +93,97 @@ create table if not exists public.tags (
 
 create index if not exists idx_tags_section_id on public.tags(section_id);
 
--- Tabla: match_tag_configurations
-create table if not exists public.match_tag_configurations (
+-- Tabla: screens
+create table if not exists public.screens (
   id uuid primary key default gen_random_uuid(),
-  match_id uuid not null references public.matches(id) on delete cascade,
-  tag_id uuid not null references public.tags(id) on delete cascade,
-  unique(match_id, tag_id)
+  name text not null,
+  show_players boolean default true,
+  user_id uuid references auth.users(id)
 );
 
-create index if not exists idx_match_tag_configurations_match_id on public.match_tag_configurations(match_id);
-create index if not exists idx_match_tag_configurations_tag_id on public.match_tag_configurations(tag_id);
+create index if not exists idx_screens_user_id on public.screens(user_id);
+
+-- Tabla puente: match_screens
+create table if not exists public.match_screens (
+  id uuid primary key default gen_random_uuid(),
+  match_id uuid not null references public.matches(id) on delete cascade,
+  screen_id uuid not null references public.screens(id) on delete cascade,
+  unique(match_id, screen_id)
+);
+
+create index if not exists idx_match_screens_match_id on public.match_screens(match_id);
+create index if not exists idx_match_screens_screen_id on public.match_screens(screen_id);
+
+-- Configuración de situaciones por pantalla
+create table if not exists public.screen_situations (
+  id uuid primary key default gen_random_uuid(),
+  screen_id uuid not null references public.screens(id) on delete cascade,
+  situation_id uuid not null references public.situations(id) on delete cascade,
+  position int not null,
+  unique(screen_id, situation_id),
+  unique(screen_id, position)
+);
+
+create index if not exists idx_screen_situations_screen_id on public.screen_situations(screen_id);
+create index if not exists idx_screen_situations_situation_id on public.screen_situations(situation_id);
+
+-- Configuración de secciones dentro de una situación en pantalla
+create table if not exists public.screen_situation_sections (
+  id uuid primary key default gen_random_uuid(),
+  screen_situation_id uuid not null references public.screen_situations(id) on delete cascade,
+  section_id uuid not null references public.sections(id) on delete cascade,
+  position int not null,
+  unique(screen_situation_id, section_id),
+  unique(screen_situation_id, position)
+);
+
+create index if not exists idx_screen_situation_sections_screen_situation_id on public.screen_situation_sections(screen_situation_id);
+create index if not exists idx_screen_situation_sections_section_id on public.screen_situation_sections(section_id);
+
+-- Configuración de etiquetas dentro de una sección mostrada en pantalla
+create table if not exists public.screen_section_tags (
+  id uuid primary key default gen_random_uuid(),
+  screen_section_id uuid not null references public.screen_situation_sections(id) on delete cascade,
+  tag_id uuid not null references public.tags(id) on delete cascade,
+  position int not null,
+  unique(screen_section_id, tag_id),
+  unique(screen_section_id, position)
+);
+
+create index if not exists idx_screen_section_tags_screen_section_id on public.screen_section_tags(screen_section_id);
+create index if not exists idx_screen_section_tags_tag_id on public.screen_section_tags(tag_id);
+
+-- Activar Row Level Security
+alter table public.teams enable row level security;
+
+-- Permitir acceso solo a sus propios registros
+create policy "Users can view their own teams"
+  on public.teams for select
+  using (auth.uid() = user_id);
+
+create policy "Users can insert their own teams"
+  on public.teams for insert
+  with check (auth.uid() = user_id);
+
+create policy "Users can update their own teams"
+  on public.teams for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+create policy "Users can delete their own teams"
+  on public.teams
+  for delete
+  using (auth.uid() = user_id);
+
 
 alter table if exists public.situations enable row level security;
 alter table if exists public.sections enable row level security;
 alter table if exists public.tags enable row level security;
+alter table if exists public.screens enable row level security;
+alter table if exists public.match_screens enable row level security;
+alter table if exists public.screen_situations enable row level security;
+alter table if exists public.screen_situation_sections enable row level security;
+alter table if exists public.screen_section_tags enable row level security;
 
 do $$
 begin
@@ -137,6 +197,143 @@ begin
     create policy "Situations are manageable by owner" on public.situations
       using (auth.uid() = user_id)
       with check (auth.uid() = user_id);
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'screens'
+      and policyname = 'Screens manageable by owner'
+  ) then
+    create policy "Screens manageable by owner" on public.screens
+      using (auth.uid() = user_id)
+      with check (auth.uid() = user_id);
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'match_screens'
+      and policyname = 'Match screens owned via screen'
+  ) then
+    create policy "Match screens owned via screen" on public.match_screens
+      using (
+        exists (
+          select 1
+          from public.screens s
+          where s.id = match_screens.screen_id
+            and s.user_id = auth.uid()
+        )
+      )
+      with check (
+        exists (
+          select 1
+          from public.screens s
+          where s.id = match_screens.screen_id
+            and s.user_id = auth.uid()
+        )
+      );
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'screen_situations'
+      and policyname = 'Screen situations tied to owned screen'
+  ) then
+    create policy "Screen situations tied to owned screen" on public.screen_situations
+      using (
+        exists (
+          select 1
+          from public.screens s
+          where s.id = screen_situations.screen_id
+            and s.user_id = auth.uid()
+        )
+      )
+      with check (
+        exists (
+          select 1
+          from public.screens s
+          where s.id = screen_situations.screen_id
+            and s.user_id = auth.uid()
+        )
+      );
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'screen_situation_sections'
+      and policyname = 'Screen sections tied to owned screen'
+  ) then
+    create policy "Screen sections tied to owned screen" on public.screen_situation_sections
+      using (
+        exists (
+          select 1
+          from public.screen_situations ss
+          join public.screens s on s.id = ss.screen_id
+          where ss.id = screen_situation_sections.screen_situation_id
+            and s.user_id = auth.uid()
+        )
+      )
+      with check (
+        exists (
+          select 1
+          from public.screen_situations ss
+          join public.screens s on s.id = ss.screen_id
+          where ss.id = screen_situation_sections.screen_situation_id
+            and s.user_id = auth.uid()
+        )
+      );
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'screen_section_tags'
+      and policyname = 'Screen tags tied to owned screen'
+  ) then
+    create policy "Screen tags tied to owned screen" on public.screen_section_tags
+      using (
+        exists (
+          select 1
+          from public.screen_situation_sections sss
+          join public.screen_situations ss on ss.id = sss.screen_situation_id
+          join public.screens s on s.id = ss.screen_id
+          where sss.id = screen_section_tags.screen_section_id
+            and s.user_id = auth.uid()
+        )
+      )
+      with check (
+        exists (
+          select 1
+          from public.screen_situation_sections sss
+          join public.screen_situations ss on ss.id = sss.screen_situation_id
+          join public.screens s on s.id = ss.screen_id
+          where sss.id = screen_section_tags.screen_section_id
+            and s.user_id = auth.uid()
+        )
+      );
   end if;
 end $$;
 
